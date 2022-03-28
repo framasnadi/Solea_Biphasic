@@ -1,0 +1,440 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+# Biphasic von Bertalanffy growth curve for common sole using nonlinear mixed effects models (SAEM Algorithm)
+
+The existence of a trade-off between allocating energy between somatic growth and reproduction has been suggested (Lester et al., 2004). Reproductive effort should negatively influence growth: more energy would be allocated to somatic growth during the young years of life (i.e. immature fish), leading to fast growth, whereas after reaching sexual maturity, energy would be divided into two activities(reproductive investment and somatic growth), and the growth in size would decrease as a consequence. Hence, biphasic growth curves to correct for the absence of energetic costs linked to reproduction before sexual maturation (or the small energetic cost during the first few years after maturation) have been proposed (Day and Taylor, 1997; Lester et al., 2004; Charnov, 2008; Quince et al., 2008a, b).
+
+Until now (using standart non linear models as nls in stat package), the individual parameters were considered a fixed effects: we didn't make any assumption about there possible values. In a population approach, the N subjects are assumed to be randomly sampled from a same population of individuals. Then, each individual parameter is treated as a random variable. A population approach and the use of mixed effects models will allow us to take into account this inter individual variability.
+
+Several algorithms exists for maximum likelihood estimation in nonlinear mixed effects models. In particular, the stochastic approximation EM algorithm (SAEM) is an iterative algorithm that converges to a maximum of the likelihood function under general conditions The saemix package for R provides maximum likelihood estimates of parameters in nonlinear mixed effect models, using a modern and efficient estimation algorithm, the stochastic approximation expectation maximisation (SAEM) algorithm.
+
+Full details on seaemix model setting & diagnostics can be find in "Parameter Estimation in Nonlinear Mixed Effect Models Using saemix, an R Implementation of the SAEM Algorithm" by Comets et al. 2017 (doi: 10.18637/jss.v080.i03)
+
+Here we test the 2-steps VB curve (5 parameters) on Solea solea back-calculation data (30 fish GSA17 from Solemon Survey 2014-2020)
+
+1.  Load the dataset 
+
+2.  Fit a Two step von Bertalanffy growth model:
+
+    1)  $y(t) = Linf (1-\exp(-k(t-t0))) \\ if \  t < t1$
+    2)  $y(t) = Linf (1-\exp(-k0(t1-t0)-k1(t-t1))) \\ if \ t > t1$
+
+    assuming the same population parameters for the two sex (sex can be introduce as covariate) using log-normal distributions for the parameters Linf and t1 ,logit for k0 and k1 and normal for t0 assuming variance in Linf,k0,t0,k1,t1 and assuming co-variance between all VB parameters. 
+
+Correlations between random effects can be introduced with the input argument covariance.model, a square matrix of size equal to the number of parameters in the model, giving the variance-covariance structure of the model: 1s correspond to estimated variances (in the diagonal) or covariances (off-diagonal elements).
+
+3.  Check model diagnostic
+
+Correlations plots Individual and population predictions Observations vs population predictions Scatter plot of residuals Residuals distribution Boxplots of the random effects Plots of the marginal distribution of the random effects Convergence plots Plotting Visual Predictiv Check
+
+# Data plotting 
+
+Plotting back-calculated length-at-age all together and by Sex & year
+
+```{r message=FALSE, warning=FALSE}
+library(saemix)
+library(FSA)
+library(readr)
+library(ggplot2)
+library(dplyr)
+setwd("C:/Users/f.masnadi/Desktop/Stock Assessment/SS3/SOLEA_SS3/dati/VBGP/Paper_bifasic/NonLinearMixEffModels")
+data_sol <- read.csv("data_saemixC.csv")  %>% filter(Age > 0) %>% filter(id != "2740") %>% filter(id != "4052") 
+ggplot(data=data_sol, aes(x=Age,y=TL, colour=as.character(id))) + geom_point(  size=2) + xlab("time (Age)") + ylab("BC len (mm)")+geom_line( )+ theme_bw()
+ggplot(data=data_sol, aes(x=Age,y=TL, colour=as.character(id))) + geom_point(  size=2) + xlab("time (Age)") + ylab("BC len (mm)")+geom_line( )+  facet_grid(   year ~Sex ) + theme_bw()
+
+```
+
+Calculate MEAN back-calculated length-at-age (+- sd)
+```{r message=FALSE, warning=FALSE}
+tmp <- data_sol %>%
+  group_by(Age) %>%  
+  summarize(n=validn(TL),
+            mn=round(mean(TL),0),
+            sd=round(sd(TL),1)) %>%
+  as.data.frame()
+tmp$up <- tmp$mn + tmp$sd
+tmp$dw <- tmp$mn - tmp$sd
+ggplot(tmp, aes(Age, mn)) + geom_line() + geom_line(aes(Age, up),linetype = 2) + geom_line(aes(Age, dw), linetype = 2) + geom_point()+ xlab("time (Age)") + ylab("BC len (mm)")+ theme_bw()
+
+```
+
+# Model setting
+
+Create first the saemixData object
+```{r message=FALSE, warning=FALSE}
+saemix.data<-saemixData(name.data=data_sol, 
+                        name.group=c("id"),
+                        name.predictors=c("Age"),
+                      # name.covariates = c("Sex"),
+                        name.response=c("TL"))
+
+```
+
+
+Implement then the structural model and create the saemixModel object. Initial values for the population parameters should be provided.
+
+```{r, message=FALSE, warning=FALSE}
+vb.model <- function(psi,id,x) { 
+  Age <- x[,1]
+  Linf<-psi[id,1]
+  k0<-psi[id,2]
+  t0<-psi[id,3]
+  k1<-psi[id,4]
+  t1<- psi[id,5]
+   ypred <- (Age <= t1)*(Linf*(1-exp(-k0*(Age-t0)))) +  (Age > t1)*(Linf*(1-exp(-k0*(t1-t0)-k1*(Age-t1))))
+  return(ypred)
+}
+
+saemix.vb.model0<-saemixModel(model=vb.model,
+     psi0=matrix(c(380,0.3,-0.5,0.2,1.8), ncol = 5, byrow = TRUE, dimnames = list(NULL, c("Linf", "k0", "t0", "k1", "t1" ))),
+     transform.par=c(1,1,0,1,1), #The distr for each parameter (0 = normal, 1 = log-normal, 2 =probit, 3 = logit).
+     fixed.estim=c(1,1,1,1,1), #Whether parameters should be estimated (1) or fixed to their initial estimate (0)
+     covariance.model = matrix(c(1, 1, 1, 1, 1, 
+                                 1, 1, 1, 1, 1,
+                                 1, 1, 1, 1, 1, 
+                                 1, 1, 1, 1, 1,
+                                 1, 1, 1, 1, 1), ncol = 5, byrow = TRUE)) 
+#A square matrix of size equal to the number of parameters in the model, giving the variance-covariance matrix of the model
+
+```
+
+Run saemix for estimating the population parameters, computing the individual estimates, computing the FIM and the log-likelihood (linearization)
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+saemix.options<-saemixControl(map=TRUE, fim=TRUE, ll.is=FALSE, displayProgress=FALSE, seed=12345,nb.chains = 5)
+saemix.vb.fit0 <- saemix(saemix.vb.model0,saemix.data,saemix.options)
+```
+
+# Results
+
+```{r}
+summary(saemix.vb.fit0)
+```
+
+For each parameter estimated in the model, estimates of the standard error are reported, as an absolute value (SE) and relative to the estimate, as a coefficient of variation (% CV). In the present case, the fixed parameters Linf, k0, t1, k1 are well estimated, with coefficients of variation about 10%. t0 have a grater variation (11%). CV for random effects are quite high (>30%) maybe reflecting the limited information available with only 30 subjects in the dataset (119 in Alos et al. 2010).
+
+Individual parameters value:
+
+```{r}
+psi <- psi(saemix.vb.fit0)
+psi 
+```
+
+# Diagnostic
+
+Display some diagnostic plots:
+
+Correlations plots
+
+```{r}
+saemix.plot.select(saemix.vb.fit0,correlations = T)
+```
+
+
+Observations vs population predictions
+In Bayesian statistics, Maximum A Posteriori estimate (MAP) is an estimate of an unknown quantity, that equals the mode of the posterior distribution. 
+
+```{r, warning=FALSE,message=FALSE}
+saemix.plot.obsvspred(saemix.vb.fit0)
+```
+Residuals distribution
+
+```{r}
+saemix.plot.select(saemix.vb.fit0,residuals.distribution = T)
+```
+
+Scatter plot of residuals NPDE : Normalised Prediction Distribution Errors (Comets E, Brendel K, Mentré F (2008).)
+
+```{r, fig.height=7}
+saemix.plot.scatterresiduals(saemix.vb.fit0 )
+```
+
+Residuals distribution
+
+
+Boxplots of the random effects
+
+```{r}
+saemix.plot.select(saemix.vb.fit0,random.effects = T)
+```
+
+Plots of the marginal distribution of the random effects It gives the probabilities of various values of the variables in the subset without reference to the values of the other variables.
+
+```{r}
+saemix.plot.select(saemix.vb.fit0,marginal.distribution = T) 
+```
+
+
+
+```{r,fig.height=7,fig.width=11}
+# Convergence plots
+# saemix.plot.select(saemix.vb.fit0,convergence =T)
+```
+
+
+# Classic (3-par) VB
+
+The same dataset was used to fit a classical VB curve (only 3 parameters: Linf, k, t0)
+```{r, message=FALSE, warning=FALSE,echo=FALSE,results=FALSE}
+saemix.data3<-saemixData(name.data=data_sol, 
+                        name.group=c("id"),
+                        name.predictors=c("Age"),
+                        name.response=c("TL"))
+
+vb.model3 <- function(psi,id,x) { 
+  Age <- x[,1]
+  Linf<-psi[id,1]
+  k<-psi[id,2]
+  t0<-psi[id,3]
+  ypred<- Linf*(1-exp(-k*(Age-t0)))  
+  return(ypred)
+}
+
+saemix.vb.model3<-saemixModel(model=vb.model3,
+                  psi0=matrix(c(380,0.3,-0.5), ncol = 3, byrow = TRUE, dimnames = list(NULL, c("Linf", "k", "t0"))),
+                  transform.par=c(1,1,0), #The distr for each parameter (0 = normal, 1 = log-normal, 2 =probit, 3 = logit).
+                  fixed.estim=c(1,1,1), #Whether parameters should be estimated (1) or fixed to their initial estimate (0)
+               covariance.model = matrix(c(1, 1, 1,1, 1,1, 1, 1,1), ncol = 3, byrow = TRUE)) #A square matrix of size equal to the number of parameters in the model, giving the variance-covariance matrix of the model
+saemix.options3<-saemixControl(map=TRUE, fim=TRUE, ll.is=FALSE, displayProgress=FALSE, seed=12345, nb.chains = 5)
+saemix.vb.fit3 <- saemix(saemix.vb.model3,saemix.data3,saemix.options3)
+```
+
+
+# Results Classic VB
+
+```{r}
+summary(saemix.vb.fit3)
+```
+
+Individual parameters value:
+
+```{r}
+psi3 <- psi(saemix.vb.fit3)
+psi3
+```
+
+
+# Comparison Classic (3-par) vs Biphasic (5-par) VB
+
+```{r,fig.height=7,fig.width=11,echo=FALSE}
+# 5 par population pred
+TL <- saemix.vb.fit0@results@ypred   #a vector giving the population predictions obtained with the MAP estimates
+Biph_i <- as.data.frame(TL); Biph_i$Age <- data_sol$Age 
+Biph_i$id <- data_sol$id
+Biph_i$source <- "Biphasic_VB"
+# 3 par population pred
+TL <- saemix.vb.fit3@results@ypred    #a vector giving the population predictions obtained with the MAP estimates
+norm_i <- as.data.frame(TL); norm_i$Age <- data_sol$Age  
+norm_i$id <- data_sol$id
+norm_i$source <- "Classic_VB"
+# data original
+TL <- data_sol$TL
+orig_i <- as.data.frame(TL); orig_i$Age <- data_sol$Age  
+orig_i$id <- data_sol$id
+orig_i$source <- "Original_data"
+db_fin_pop <- rbind(orig_i,norm_i,Biph_i)
+write.csv(db_fin_pop, "db_fin_pop.csv")
+
+# 5 par indivdual pred
+TL <- saemix.vb.fit0@results@ipred    #a vector giving the individual predictions obtained with the MAP estimates
+Biph_i <- as.data.frame(TL); Biph_i$Age <- data_sol$Age   
+Biph_i$id <- data_sol$id
+Biph_i$source <- "Biphasic_VB"
+# 3 par indivdual pred
+TL <- saemix.vb.fit3@results@ipred    #a vector giving the individual predictions obtained with the MAP estimates
+norm_i <- as.data.frame(TL); norm_i$Age <- data_sol$Age  
+norm_i$id <- data_sol$id
+norm_i$source <- "Classic_VB"
+# data original
+TL <- data_sol$TL
+orig_i <- as.data.frame(TL); orig_i$Age <- data_sol$Age   
+orig_i$id <- data_sol$id
+orig_i$source <- "Original_data"
+db_fin_ind <- rbind(orig_i,norm_i,Biph_i)
+write.csv(db_fin_ind, "db_fin_ind.csv")
+```
+
+
+Visual comparison on SS5479 
+
+```{r,fig.height=7,fig.width=11,echo=FALSE}
+# Biphasic VB vs Classic VB by id
+ID <- 5479
+ss <- db_fin_ind %>% filter(id == ID)
+ggplot(data=ss, aes(x=Age,y=TL,colour=source)) + geom_point(data=ss %>% filter(source == "Original_data"), size=2) + xlab("time (Age)") + ylab("TL (cm)")+geom_line( data=ss %>% filter(source != "Original_data"), aes(x=Age,y=TL,colour=source ,linetype=source ),size=1.1) + scale_linetype_manual(values=c("longdash","solid"))+scale_color_manual(values=c('grey54','grey78',"black"))+facet_wrap(~ id) +ggtitle(paste0("Biphasic VB vs Classic VB in SS",ID))+ theme_bw()
+```
+
+
+```{r,fig.height=7,fig.width=11,echo=FALSE}
+# Biphasic VB vs Classic VB: population level
+ggplot(data=db_fin_pop, aes(x=Age,y=TL,colour=source)) + geom_point(data=db_fin_pop %>% filter(source == "Original_data"), size=1.5) + xlab("time (Age)") + ylab("TL (cm)")+ geom_line( data=db_fin_pop %>% filter(source != "Original_data")%>% filter(id == ID), aes(x=Age,y=TL,colour=source ,linetype=source ),size=1.1)+
+  scale_linetype_manual(values=c("longdash", "solid"))+scale_color_manual(values=c('grey54','grey78',"black")) +ggtitle("Biphasic VB vs Classic VB: population level")+ theme_bw()
+```
+
+# Residuals boxplots
+
+Box plots of the residuals of the von Bertalanffy growth models based on three and five parameters, defined as the observed
+length-at-age minus the predicted posterior mean of the model. 
+
+```{r,fig.height=7,fig.width=11,warning=FALSE,echo=FALSE,message=FALSE}
+library(gridExtra)
+# Biphasic VB
+yp <- saemix.vb.fit0@results@ypred
+pop <- saemix.vb.fit0@results@ppred
+ind <- saemix.vb.fit0@results@ipred
+orig <- saemix.vb.fit0@data@data[["TL"]]
+yres <- orig - yp
+pres <- orig - pop
+ires <-  orig - ind
+PRE.ind <- 100*((ind - orig)/orig)
+PRE.pop <- 100*((yp - orig)/orig)
+sol5b <- data.frame(ires,yres,PRE.ind,PRE.pop,orig)
+sol5b$Age <- data_sol$Age  
+
+# Classic VB
+yp <- saemix.vb.fit3@results@ypred
+pop <- saemix.vb.fit3@results@ppred
+ind <- saemix.vb.fit3@results@ipred
+orig <- saemix.vb.fit3@data@data[["TL"]]
+yres <- orig - yp
+pres <- orig - pop
+ires <-  orig - ind
+PRE.ind <- 100*((ind - orig)/orig)
+PRE.pop <- 100*((yp - orig)/orig)
+sol3b <- data.frame(ires,yres,PRE.ind,PRE.pop,orig)
+sol3b$Age <- data_sol$Age  
+
+# Individual prediction, MAP
+ind3<-ggplot(sol3b, aes(x=as.factor(Age), y=ires)) +
+  geom_boxplot(fatten = NULL)+stat_summary(fun = mean, geom = "point", size = 4)+ggtitle(expression(atop("3-par VB residuals (mm) by Age", atop(italic("Individual prediction"), ""))))+xlab("Age")+ylab("Residuals (mm)")+ geom_hline(yintercept=0,linetype="dashed")+ylim(-25,25)
+ind5<-ggplot(sol5b, aes(x=as.factor(Age), y=ires)) +
+  geom_boxplot(fatten = NULL)+stat_summary(fun = mean, geom = "point", size = 4)+ggtitle(expression(atop("5-par VB residuals (mm) by Age", atop(italic("Individual prediction"), ""))))+xlab("Age")+ylab("Residuals (mm)")+ geom_hline(yintercept=0,linetype="dashed")+ylim(-25,25)
+#jpeg("SEAMIX Individual prediction comparison.jpeg",width = 500, height = 250, units = "mm", res = 300)
+bxind2<-grid.arrange(ind3,ind5, nrow = 1)
+
+
+# Mean population 
+yres3<-ggplot(sol3b, aes(x=as.factor(Age), y=yres)) +
+  geom_boxplot(fatten = NULL)+stat_summary(fun = mean, geom = "point", size = 4)+ggtitle(expression(atop("3-par VB residuals (mm) by Age", atop(italic("Population prediction"), ""))))+xlab("Age")+ylab("Residuals (mm)")+ geom_hline(yintercept=0,linetype="dashed")+ylim(-60,60)
+yres5<-ggplot(sol5b, aes(x=as.factor(Age), y=yres)) +
+  geom_boxplot(fatten = NULL)+stat_summary(fun = mean, geom = "point", size = 4)+ggtitle(expression(atop("5-par VB residuals (mm) by Age", atop(italic("Population prediction"), ""))))+xlab("Age")+ylab("Residuals (mm)")+ geom_hline(yintercept=0,linetype="dashed")+ylim(-60,60)
+#jpeg("SAEMIX Mean population predictions comparison.jpeg",width = 500, height = 250, units = "mm", res = 300)
+bxind2<-grid.arrange(yres3,yres5, nrow = 1)
+```
+
+
+# Percentage relative error (PRE) boxplots
+The relative error is the absolute error divided by the magnitude of the exact value. The percent relative error is the relative error expressed in terms of per 100.
+
+```{r,fig.height=7,fig.width=11,warning=FALSE,echo=FALSE,message=FALSE}
+
+
+# Individual prediction, MAP
+ind3pre<-ggplot(sol3b, aes(x=as.factor(Age), y=PRE.ind)) +
+  geom_boxplot(fatten = NULL)+stat_summary(fun = mean, geom = "point", size = 4)+ggtitle(expression(atop("3-par VB percentage relative error (PRE) by Age", atop(italic("Individual prediction"), ""))))+xlab("Age")+ylab("Relative error (%)")+ geom_hline(yintercept=0,linetype="dashed")+ylim(-15,15)
+ind5pre<-ggplot(sol5b, aes(x=as.factor(Age), y=PRE.ind)) +
+  geom_boxplot(fatten = NULL)+stat_summary(fun = mean, geom = "point", size = 4)+ggtitle(expression(atop("5-par VB percentage relative error (PRE) by Age", atop(italic("Individual prediction"), ""))))+xlab("Age")+ylab("Relative error (%)")+ geom_hline(yintercept=0,linetype="dashed")+ylim(-15,15)
+#jpeg("SEAMIX Individual prediction comparison.jpeg",width = 500, height = 250, units = "mm", res = 300)
+bxind2<-grid.arrange(ind3pre,ind5pre, nrow = 1)
+
+
+# Mean population 
+yres3pre<-ggplot(sol3b, aes(x=as.factor(Age), y=PRE.pop)) +
+  geom_boxplot(fatten = NULL)+stat_summary(fun = mean, geom = "point", size = 4)+ggtitle(expression(atop("3-par VB percentage relative error (PRE) by Age", atop(italic("Population prediction"), ""))))+xlab("Age")+ylab("Relative error (%)")+ geom_hline(yintercept=0,linetype="dashed")+ylim(-30,60)
+yres5pre<-ggplot(sol5b, aes(x=as.factor(Age), y=PRE.pop)) +
+  geom_boxplot(fatten = NULL)+stat_summary(fun = mean, geom = "point", size = 4)+ggtitle(expression(atop("5-par VB percentage relative error (PRE) by Age", atop(italic("Population prediction"), ""))))+xlab("Age")+ylab("Relative error (%)")+ geom_hline(yintercept=0,linetype="dashed")+ylim(-30,60)
+#jpeg("SAEMIX Mean population predictions comparison.jpeg",width = 500, height = 250, units = "mm", res = 300)
+bxind2<-grid.arrange(yres3pre,yres5pre, nrow = 1)
+```
+
+
+# Frequency distribution of "in common" individual parameters Linf and t0
+Linf is higher for the biphasic curve and t0 is closer to 0 respect to the classic VB
+
+```{r,fig.height=7,fig.width=11,warning=FALSE,echo=FALSE,message=FALSE}
+# Linf
+dbLinf5 <- psi %>% select(Linf) ;  dbLinf5$source <- "Bhipasic_Vb"; dbLinf5$id <-unique(data_sol$id)
+dbLinf3 <- psi3 %>% select(Linf) ;dbLinf3$source <- "Classic_Vb"; dbLinf3$id <-unique(data_sol$id)
+dbLinf <- rbind(dbLinf3,dbLinf5)
+ggplot(dbLinf, aes(x=Linf, fill=source, color=source)) +
+  geom_histogram(position="dodge", alpha=0.6,adjust = 0.7)+scale_color_manual(values=c('black','black'))+scale_fill_manual(values=c('grey54','grey78'))+ggtitle(c(paste("Frequency distribution of the the parameter Linf estimated based on three or five parameters curve")))+scale_x_continuous(n.breaks = 30,limits = c(210, 480))
+
+# k0
+dbk05 <- psi %>% select(k0) ;  dbk05$source <- "Bhipasic_Vb"; dbk05$id <-unique(data_sol$id)
+names(psi3)[names(psi3) == 'k'] <- "k0"
+dbk03 <- psi3  %>% select(k0) ;dbk03$source <- "Classic_Vb"; dbk03$id <-unique(data_sol$id)
+dbk0 <- rbind(dbk03,dbk05)
+ggplot(dbk0, aes(x=k0, fill=source, color=source)) +
+  geom_histogram(position="dodge", alpha=0.6,adjust = 0.7)+scale_color_manual(values=c('black','black'))+scale_fill_manual(values=c('grey54','grey78'))+ggtitle(c(paste("Frequency distribution of the the parameter k0 estimated based on three or five parameters curve")))+scale_x_continuous(n.breaks = 30,limits = c(0, 0.8))
+
+# k1
+dbk15 <- psi %>% select(k1) ;  dbk15$source <- "Bhipasic_Vb"; dbk15$id <-unique(data_sol$id)
+ggplot(dbk15, aes(x=k1, fill=source, color=source)) +
+  geom_histogram(position="dodge", alpha=0.6,adjust = 0.7)+scale_color_manual(values=c('black','black'))+scale_fill_manual(values=c('grey54','grey78'))+ggtitle(c(paste("Frequency distribution of the the parameter k1 estimated based on five parameters curve")))+scale_x_continuous(n.breaks = 30,limits = c(0, 0.4))
+
+
+# t0
+dbt05 <- psi %>% select(t0) ;  dbt05$source <- "Bhipasic_Vb"; dbt05$id <-unique(data_sol$id)
+dbt03 <- psi3 %>% select(t0) ;dbt03$source <- "Classic_Vb"; dbt03$id <-unique(data_sol$id)
+dbt0 <- rbind(dbt03,dbt05)
+ggplot(dbt0, aes(x=t0, fill=source, color=source)) +
+  geom_histogram(position="dodge", alpha=0.6,adjust = 0.7)+scale_color_manual(values=c('black','black'))+scale_fill_manual(values=c('grey54','grey78'))+ggtitle(c(paste("Frequency distribution of the the parameter t0 estimated based on three or five parameters curve")))+scale_x_continuous(n.breaks = 30,limits = c(-2.8, 0.1))
+
+# t1
+dbt15 <- psi %>% select(t1) ;  dbt15$source <- "Bhipasic_Vb"; dbt15$id <-unique(data_sol$id)
+ggplot(dbt15, aes(x=t1, fill=source, color=source)) +
+  geom_histogram(position="dodge", alpha=0.6,adjust = 0.7)+scale_color_manual(values=c('black','black'))+scale_fill_manual(values=c('grey54','grey78'))+ggtitle(c(paste("Frequency distribution of the the parameter t0 estimated based on three or five parameters curve")))+scale_x_continuous(n.breaks = 30,limits = c(0, 3))
+
+# valori per paper
+# linf
+dbLinf %>% group_by(source)%>% summarise(min = min(Linf),max = max(Linf),Med = median(Linf))
+#k0
+dbk0 %>% group_by(source)%>% summarise(min = min(k0),max = max(k0),Med = median(k0))
+#t0
+dbt0 %>% group_by(source)%>% summarise(min = min(t0),max = max(t0),Med = median(t0))
+#t1
+dbt15 %>% group_by(source)%>% summarise(min = min(t1),max = max(t1),Med = median(t1))
+#k1
+dbk15 %>% group_by(source)%>% summarise(min = min(k1),max = max(k1),Med = median(k1))
+
+# t-test
+# linf
+hist(dbLinf$Linf)
+t.test(Linf ~ source, data = dbLinf)
+# k0
+hist(dbk0$k0)
+t.test(k0 ~ source, data = dbk0)
+#t0
+hist(dbt0$t0)
+t.test(t0 ~ source, data = dbt0)
+```
+
+
+
+# Final conclusion
+Models can be compared through the Akaike criterion (AIC) and Schwarz's information criterion, also called Bayes information criterion or BIC.
+
+Here a the comparison between the Classic (3-par) vs Biphasic (5-par) VB for these 32 fishes. Model selection via statistical criteria selected the Biphasic model as the best one (AIC and BIC lower than the Classic one). 7/8 cm difference in Linf.
+
+```{r ,echo=FALSE}
+#db_fin_pop <- read.csv("db_fin_pop_allcor7.csv")
+#db_fin_ind <- read.csv("db_fin_ind_allcor7.csv")
+library(readxl)
+CvsB <- read_excel("Classic vs BiphasicVB.xlsx");CvsB
+```
+
+
+# 
+On an individual level, the biphasic curve fits the data much better than the classic VB curve ( younger and older ages). 
+
+At the population level, the residues are quite high for both models, however the trend observed at the individual level is replicated.
+
+Despite the paucity of data, we can already see the growth change around 2 years (t1=1.6) with k (k0=0.34 ; k1=0.11) decreasing after this age. Thanks to this variation of the k rate between k0 and k1, Linf is higher in the biphasic curve compared to the classic one (37 cm vs 29 cm) providing a better matching with the Lmax data for common sole (39 cm). Age > 10 are estimated worse because only few records in the data.
+
+In conlusion, individual fitting using biphasic pattern is better than classic one but the variability given by the few samples (32 fish) could be maybe too high to have acceptable population level results. Nevertheless, the advantages of the biphasic curve remain proven because the high variability at the population level is shared in both models.
+# 
