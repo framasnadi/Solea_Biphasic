@@ -1,5 +1,5 @@
 # Solea_Biphasic
-This repo contains codes for the paper _"Biphasic versus monophasic growth curve equation, an application to common sole (Solea solea, L.) in the northern and central Adriatic Sea"_
+This repo contains codes for the paper _"Biphasic versus monophasic growth curve equation, an application to common sole (Solea solea, L.) in the northern and central Adriatic Sea"_  https://doi.org/10.1016/j.fishres.2023.106694
 
 **Summary**
 
@@ -7,3 +7,5 @@ Traditionally, growth patterns are described as constant throughout life using v
 A detailed implemenation of the growth analyses using nonlinear mixed effects models (SAEM Algorithm) described in the paper is available at [solea_biphasicVBGP.pdf](https://github.com/framasnadi/Solea_Biphasic/files/8370168/solea_biphasicVBGP.pdf)
 
 ```prova_R_backCalc.R``` : Image processing and age-related measurements were conducted by adhering to the workflow recommendations of the open-source R package RfishBC (Ogle, 2022. RFishBC. R package Version 0.2.4.9000, https://doi.org/10.5281/zenodo.6058214).
+
+```solea_5pVBGP.Rmd``` : R Markdown script to estimate growth curves for common sole using nonlinear mixed effects models (SAEM Algorithm)
